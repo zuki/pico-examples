@@ -269,7 +269,7 @@ static bool tcp_server_open(void *arg, const char *ap_name) {
     return true;
 }
 
-// This "worker" function is called to safely perform work when instructed by key_pressed_func
+// この "worker" 関数は key_pressed_func によって指示されたときに安全に作業を実行するために呼び出される
 void key_pressed_worker_func(async_context_t *context, async_when_pending_worker_t *worker) {
     assert(worker->user_data);
     printf("Disabling wifi\n");
@@ -277,6 +277,7 @@ void key_pressed_worker_func(async_context_t *context, async_when_pending_worker
     ((TCP_SERVER_T*)(worker->user_data))->complete = true;
 }
 
+// キーが押されたときに処理されるワーカー
 static async_when_pending_worker_t key_pressed_worker = {
         .do_work = key_pressed_worker_func
 };
@@ -285,29 +286,34 @@ void key_pressed_func(void *param) {
     assert(param);
     int key = getchar_timeout_us(0); // get any pending key press but don't wait
     if (key == 'd' || key == 'D') {
-        // We are probably in irq context so call wifi in a "worker"
+        // おそらくirqコンテキストにいるので、"worker”でwifiを呼び出す
         async_context_set_work_pending(((TCP_SERVER_T*)param)->context, &key_pressed_worker);
     }
 }
 
 int main() {
+    // 出力用のstdioを初期化する
     stdio_init_all();
 
+    // state用のメモリを確保
     TCP_SERVER_T *state = calloc(1, sizeof(TCP_SERVER_T));
     if (!state) {
         DEBUG_printf("failed to allocate state\n");
         return 1;
     }
 
+    // CYW43アーキテクチャを初期化する
     if (cyw43_arch_init()) {
         DEBUG_printf("failed to initialise\n");
         return 1;
     }
 
-    // Get notified if the user presses a key
+    // ユーザがキーを押したら通知を受け取る
     state->context = cyw43_arch_async_context();
     key_pressed_worker.user_data = state;
+    // ワーカーに処理させるためにwork_pendingフラグを立てる
     async_context_add_when_pending_worker(cyw43_arch_async_context(), &key_pressed_worker);
+    // 文字入力があった場合に実行する関数を登録する
     stdio_set_chars_available_callback(key_pressed_func, state);
 
     const char *ap_name = "picow_test";
@@ -316,21 +322,23 @@ int main() {
 #else
     const char *password = NULL;
 #endif
-
+    // Wi-Fi AP (Access point) モードを有効にする
     cyw43_arch_enable_ap_mode(ap_name, password, CYW43_AUTH_WPA2_AES_PSK);
 
+    // gwアドレスを設定する
     ip4_addr_t mask;
     IP4_ADDR(ip_2_ip4(&state->gw), 192, 168, 4, 1);
     IP4_ADDR(ip_2_ip4(&mask), 255, 255, 255, 0);
 
-    // Start the dhcp server
+    // dhcpサーバを開始する
     dhcp_server_t dhcp_server;
     dhcp_server_init(&dhcp_server, &state->gw, &mask);
 
-    // Start the dns server
+    // dnsサーバを起動する
     dns_server_t dns_server;
     dns_server_init(&dns_server, &state->gw);
 
+    // stateをtcpサーバとしてオープンする
     if (!tcp_server_open(state, ap_name)) {
         DEBUG_printf("failed to open server\n");
         return 1;
@@ -338,19 +346,21 @@ int main() {
 
     state->complete = false;
     while(!state->complete) {
-        // the following #ifdef is only here so this same example can be used in multiple modes;
-        // you do not need it in your code
+        // 次の #ifdef はこの同じコードを複数のモードで使用できるように
+        // するためのものである; 自分のコードでは不要である。
 #if PICO_CYW43_ARCH_POLL
-        // if you are using pico_cyw43_arch_poll, then you must poll periodically from your
-        // main loop (not from a timer interrupt) to check for Wi-Fi driver or lwIP work that needs to be done.
+        // pico_cyw43_arch_pollを使用する場合は（タイマー割り込みからではなく）
+        // メインループから定期的にポーリングして、Wi-FiドライバーやlwIPの作業を
+        // チェックする必要がある
         cyw43_arch_poll();
-        // you can poll as often as you like, however if you have nothing else to do you can
-        // choose to sleep until either a specified time, or cyw43_arch_poll() has work to do:
+        // 好きなだけ何回でもポーリングしてもよいが、他にすることがなければ
+        // 指定された時間まで、あるいは、cyw43_arch_poll() がするべき仕事が
+        // できるまでスリープすることができる
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(1000));
 #else
-        // if you are not using pico_cyw43_arch_poll, then Wi-FI driver and lwIP work
-        // is done via interrupt in the background. This sleep is just an example of some (blocking)
-        // work you might be doing.
+        // pico_cyw43_arch_pollを使用しない場合はWi-FIドライバとlwIPの作業は
+        // バックグラウンドで割り込み経由で実行される。このスリープは行うであろう
+        // （ブロックする）何らかの作業のほんの一例です。
         sleep_ms(1000);
 #endif
     }
